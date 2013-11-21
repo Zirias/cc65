@@ -1,0 +1,5 @@
+asminc/* usr/lib/cc65/asminc
+include/* usr/lib/cc65/include
+lib/* usr/lib/cc65/lib
+cfg/* usr/lib/cc65/cfg
+

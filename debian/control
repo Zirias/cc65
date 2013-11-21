@@ -1,0 +1,52 @@
+Source: cc65
+Section: devel
+Priority: extra
+Maintainer: Felix Palmen <felix@palmen-it.de>
+Build-Depends: debhelper (>= 8.0.0)
+Standards-Version: 3.9.3
+Homepage: http://oliverschmidt.github.io/cc65/
+Vcs-Git: https://github.com/Zirias/cc65.git
+Vcs-Browser: https://github.com/Zirias/cc65/
+
+Package: cc65
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, cc65-data (= ${binary:Version})
+Description: Cross compiler and assembler for 6502 based systems
+ cc65 is a complete cross development package for 65(C)02 systems, including
+ a powerful macro assembler, a C compiler, linker, librarian and several
+ other tools.
+ .
+ cc65 has C and runtime library support for many of the old 6502 machines,
+ including
+ * the following Commodore machines:
+   VIC20, C16/C116 and Plus/4, C64, C128, CBM 510 (aka P500),
+   the 600/700 family, newer PET machines (not 2001).
+ * the Apple ][+ and successors.
+ * the Atari 8 bit machines.
+ * GEOS for the C64 and C128.
+ * the Nintendo Entertainment System (NES).
+ * the Supervision console.
+ * the Oric Atmos.
+ * the Lynx console.
+
+Package: cc65-data
+Architecture: all
+Recommends: cc65 (= ${binary:Version})
+Description: Libraries, includes and machine configs for cc65
+ cc65 is a complete cross development package for 65(C)02 systems, including
+ a powerful macro assembler, a C compiler, linker, librarian and several
+ other tools.
+ .
+ cc65 has C and runtime library support for many of the old 6502 machines,
+ including
+ * the following Commodore machines:
+   VIC20, C16/C116 and Plus/4, C64, C128, CBM 510 (aka P500),
+   the 600/700 family, newer PET machines (not 2001).
+ * the Apple ][+ and successors.
+ * the Atari 8 bit machines.
+ * GEOS for the C64 and C128.
+ * the Nintendo Entertainment System (NES).
+ * the Supervision console.
+ * the Oric Atmos.
+ * the Lynx console.
+

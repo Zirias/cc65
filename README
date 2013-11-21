@@ -1,3 +1,11 @@
+Notice: This is a fork of cc65 from http://oliverschmidt.github.io/cc65/.
+The only change so far is the added "debian" directory, enabling the creation
+of packages for debian-based GNU/Linux systems.
+
+===
+Original README:
+===
+
 cc65 is a complete cross development package for 65(C)02 systems, including
 a powerful macro assembler, a C compiler, linker, librarian and several
 other tools.

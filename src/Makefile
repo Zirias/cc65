@@ -13,11 +13,11 @@ PROGS = ar65  \
         sp65
 
 ifdef prefix
-  CA65_INC = $(prefix)/lib/cc65/asminc
-  CC65_INC = $(prefix)/lib/cc65/include
-  LD65_LIB = $(prefix)/lib/cc65/lib
-  LD65_OBJ = $(prefix)/lib/cc65/lib
-  LD65_CFG = $(prefix)/lib/cc65/cfg
+  CA65_INC = $(prefix)/share/cc65/asminc
+  CC65_INC = $(prefix)/share/cc65/include
+  LD65_LIB = $(prefix)/share/cc65/lib
+  LD65_OBJ = $(prefix)/share/cc65/lib
+  LD65_CFG = $(prefix)/share/cc65/cfg
 else
   CA65_INC := $(abspath ../asminc)
   CC65_INC := $(abspath ../include)

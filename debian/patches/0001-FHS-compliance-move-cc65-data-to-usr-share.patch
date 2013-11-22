@@ -1,0 +1,32 @@
+From 5ffc7fecae7abac21321fef130066d48295bd409 Mon Sep 17 00:00:00 2001
+From: Felix Palmen <felix@palmen-it.de>
+Date: Fri, 22 Nov 2013 14:26:47 +0100
+Subject: FHS compliance: move cc65 data to /usr/share
+
+cc65 data is independent of the host architecture, so it should reside
+in /usr/share/cc65 instead of /usr/lib/cc65.
+
+diff --git a/src/Makefile b/src/Makefile
+index 3d04631..fad6f55 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -13,11 +13,11 @@ PROGS = ar65  \
+         sp65
+ 
+ ifdef prefix
+-  CA65_INC = $(prefix)/lib/cc65/asminc
+-  CC65_INC = $(prefix)/lib/cc65/include
+-  LD65_LIB = $(prefix)/lib/cc65/lib
+-  LD65_OBJ = $(prefix)/lib/cc65/lib
+-  LD65_CFG = $(prefix)/lib/cc65/cfg
++  CA65_INC = $(prefix)/share/cc65/asminc
++  CC65_INC = $(prefix)/share/cc65/include
++  LD65_LIB = $(prefix)/share/cc65/lib
++  LD65_OBJ = $(prefix)/share/cc65/lib
++  LD65_CFG = $(prefix)/share/cc65/cfg
+ else
+   CA65_INC := $(abspath ../asminc)
+   CC65_INC := $(abspath ../include)
+-- 
+1.7.10.4
+

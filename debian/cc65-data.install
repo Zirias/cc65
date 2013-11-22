@@ -1,11 +1,11 @@
-asminc/* usr/lib/cc65/asminc
-include/* usr/lib/cc65/include
-lib/* usr/lib/cc65/lib
-cfg/* usr/lib/cc65/cfg
-targetutil/* usr/lib/cc65/targetutil
-emd/* usr/lib/cc65/emd
-joy/* usr/lib/cc65/joy
-mou/* usr/lib/cc65/mou
-ser/* usr/lib/cc65/ser
-tgi/* usr/lib/cc65/tgi
+asminc/* usr/share/cc65/asminc
+include/* usr/share/cc65/include
+lib/* usr/share/cc65/lib
+cfg/* usr/share/cc65/cfg
+targetutil/* usr/share/cc65/targetutil
+emd/* usr/share/cc65/emd
+joy/* usr/share/cc65/joy
+mou/* usr/share/cc65/mou
+ser/* usr/share/cc65/ser
+tgi/* usr/share/cc65/tgi
 

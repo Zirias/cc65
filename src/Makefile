@@ -13,18 +13,19 @@ PROGS = ar65  \
         sp65
 
 ifdef prefix
-  CA65_INC = $(prefix)/share/cc65/asminc
-  CC65_INC = $(prefix)/share/cc65/include
-  LD65_LIB = $(prefix)/share/cc65/lib
-  LD65_OBJ = $(prefix)/share/cc65/lib
-  LD65_CFG = $(prefix)/share/cc65/cfg
+  datarootdir = $(prefix)/share
+  datadir = $(datarootdir)/cc65
 else
-  CA65_INC := $(abspath ../asminc)
-  CC65_INC := $(abspath ../include)
-  LD65_LIB := $(abspath ../lib)
-  LD65_OBJ := $(abspath ../lib)
-  LD65_CFG := $(abspath ../cfg)
+  prefix = $(abspath ..)
+  datarootdir = $(prefix)
+  datadir = $(datarootdir)
 endif
+
+CA65_INC = $(datadir)/asminc
+CC65_INC = $(datadir)/include
+LD65_LIB = $(datadir)/lib
+LD65_OBJ = $(datadir)/lib
+LD65_CFG = $(datadir)/cfg
 
 CFLAGS += -MMD -MP -O -std=c89 -I common \
           -Wall -Wextra -Wno-char-subscripts -Werror $(USER_CFLAGS) \

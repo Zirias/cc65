@@ -1,15 +1,25 @@
 ;
-; Driver for a potentiometer "mouse" e.g. Koala Pad
+; Mouse driver for ST & Amiga mouses and Atari trakball.
 ;
-; Ullrich von Bassewitz, 2004-03-29, 2009-09-26
-; Stefan Haubenthal, 2006-08-20
+; Original access routines: 05/07/2000 Freddy Offenga
+; Converted to driver: Christian Groessler, 2014-01-04
+;
+; Defines:
+;       AMIGA_MOUSE     -       builds Amiga mouse version
+;       TRAK_MOUSE      -       builds trakball version
+; If none of these defines are active, the ST mouse version
+; is being built.
 ;
 
         .include        "zeropage.inc"
         .include        "mouse-kernel.inc"
-        .include        "c128.inc"
+        .include        "atari.inc"
 
         .macpack        generic
+
+.if .not ( .defined (AMIGA_MOUSE) .or .defined (TRAK_MOUSE))
+        ST_MOUSE = 1
+.endif
 
 ; ------------------------------------------------------------------------
 ; Header. Includes jump table
@@ -25,7 +35,7 @@ HEADER:
 
 ; Library reference
 
-        .addr   $0000
+libref: .addr   $0000
 
 ; Jump table
 
@@ -42,6 +52,10 @@ HEADER:
         .addr   IOCTL
         .addr   IRQ
 
+; Mouse driver flags
+
+        .byte   MOUSE_FLAG_LATE_IRQ
+
 ; Callback table, set by the kernel before INSTALL is called
 
 CHIDE:  jmp     $0000                   ; Hide the cursor
@@ -55,15 +69,14 @@ CMOVEY: jmp     $0000                   ; Move the cursor to Y coord
 ;----------------------------------------------------------------------------
 ; Constants
 
-SCREEN_HEIGHT   = 200
-SCREEN_WIDTH    = 320
+SCREEN_HEIGHT   = 191
+SCREEN_WIDTH    = 319
 
 .enum   JOY
         UP      = $01
         DOWN    = $02
         LEFT    = $04
         RIGHT   = $08
-        FIRE    = $10
 .endenum
 
 ;----------------------------------------------------------------------------
@@ -82,24 +95,63 @@ XMax:           .res    2               ; X2 value of bounding box
 YMax:           .res    2               ; Y2 value of bounding box
 Buttons:        .res    1               ; Button mask
 
-; Temporary value used in the int handler
+XPosWrk:        .res    2
+YPosWrk:        .res    2
 
-Temp:           .res    1
+.if .defined (AMIGA_MOUSE) .or .defined (ST_MOUSE)
+dumx:           .res    1
+dumy:           .res    1
+.endif
+
+.ifdef TRAK_MOUSE
+oldval:         .res    1
+.endif
+
+.ifndef __ATARIXL__
+OldT1:          .res    2
+.else
+
+.data
+set_VTIMR1_handler:
+                .byte   $4C, 0, 0
+.endif
 
 .rodata
 
-; Default values for above variables
+; Default values for some of the above variables
 ; (We use ".proc" because we want to define both a label and a scope.)
 
 .proc   DefVars
-        .word   SCREEN_HEIGHT/2         ; YPos
-        .word   SCREEN_WIDTH/2          ; XPos
+        .word   (SCREEN_HEIGHT+1)/2     ; YPos
+        .word   (SCREEN_WIDTH+1)/2      ; XPos
         .word   0                       ; XMin
         .word   0                       ; YMin
         .word   SCREEN_WIDTH            ; XMax
         .word   SCREEN_HEIGHT           ; YMax
         .byte   0                       ; Buttons
 .endproc
+
+.ifdef ST_MOUSE
+
+; ST mouse lookup table
+
+STTab:  .byte $FF,$01,$00,$01
+        .byte $00,$FF,$00,$01
+        .byte $01,$00,$FF,$00
+        .byte $01,$00,$01,$FF
+
+.endif
+
+.ifdef AMIGA_MOUSE
+
+; Amiga mouse lookup table
+
+AmiTab: .byte $FF,$01,$00,$FF
+        .byte $00,$FF,$FF,$01
+        .byte $01,$FF,$FF,$00
+        .byte $FF,$00,$01,$FF
+
+.endif
 
 .code
 
@@ -118,19 +170,66 @@ INSTALL:
         dex
         bpl     @L1
 
-; Be sure the mouse cursor is invisible and at the default location. We
-; need to do that here, because our mouse interrupt handler doesn't set the
-; mouse position if it hasn't changed.
+; Make sure the mouse cursor is at the default location.
 
-        sei
-        jsr     CHIDE
         lda     XPos
+        sta     XPosWrk
         ldx     XPos+1
+        stx     XPosWrk+1
         jsr     CMOVEX
         lda     YPos
+        sta     YPosWrk
         ldx     YPos+1
+        stx     YPosWrk+1
         jsr     CMOVEY
-        cli
+
+; Install timer irq routine to poll mouse.
+
+.ifdef __ATARIXL__
+
+        ; Setup pointer to wrapper install/deinstall function.
+        lda     libref
+        sta     set_VTIMR1_handler+1
+        lda     libref+1
+        sta     set_VTIMR1_handler+2
+
+        ; Install my handler.
+        sec
+        lda     #<T1Han
+        ldx     #>T1Han
+        jsr     set_VTIMR1_handler
+
+.else
+
+        lda     VTIMR1
+        sta     OldT1
+        lda     VTIMR1+1
+        sta     OldT1+1
+
+        php
+        sei
+        lda     #<T1Han
+        sta     VTIMR1
+        lda     #>T1Han
+        sta     VTIMR1+1
+        plp
+
+.endif
+
+        lda     #%00000001
+        sta     AUDCTL
+
+        lda     #0
+        sta     AUDC1
+
+        lda     #15
+        sta     AUDF1
+        sta     STIMER
+
+        lda     POKMSK
+        ora     #%00000001              ; timer 1 enable
+        sta     POKMSK
+        sta     IRQEN
 
 ; Done, return zero (= MOUSE_ERR_OK)
 
@@ -142,7 +241,32 @@ INSTALL:
 ; UNINSTALL routine. Is called before the driver is removed from memory.
 ; No return code required (the driver is removed from memory on return).
 
-UNINSTALL       = HIDE                  ; Hide cursor on exit
+UNINSTALL:
+
+; uninstall timer irq routine
+
+        lda     POKMSK
+        and     #%11111110              ; timer 1 disable
+        sta     IRQEN
+        sta     POKMSK
+
+.ifdef __ATARIXL__
+
+        clc
+        jsr     set_VTIMR1_handler
+
+.else
+
+        php
+        sei
+        lda     OldT1
+        sta     VTIMR1
+        lda     OldT1+1
+        sta     VTIMR1+1
+        plp
+
+.endif
+        ; fall thru...
 
 ;----------------------------------------------------------------------------
 ; HIDE routine. Is called to hide the mouse pointer. The mouse kernel manages
@@ -151,9 +275,10 @@ UNINSTALL       = HIDE                  ; Hide cursor on exit
 ; no special action is required besides hiding the mouse cursor.
 ; No return code required.
 
-HIDE:   sei
+HIDE:   php
+        sei
         jsr     CHIDE
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -163,9 +288,10 @@ HIDE:   sei
 ; no special action is required besides enabling the mouse cursor.
 ; No return code required.
 
-SHOW:   sei
+SHOW:   php
+        sei
         jsr     CSHOW
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -179,6 +305,7 @@ SETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     (ptr1),y
@@ -186,7 +313,7 @@ SETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -197,6 +324,7 @@ GETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     XMin,y
@@ -204,7 +332,7 @@ GETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -215,23 +343,37 @@ GETBOX: sta     ptr1
 ; the screen). No return code required.
 ;
 
-MOVE:   sei                             ; No interrupts
+MOVE:   php
+        sei                             ; No interrupts
+
+        pha
+        txa
+        pha
+        jsr     CPREP
+        pla
+        tax
+        pla
 
         sta     YPos
+        sta     YPosWrk
         stx     YPos+1                  ; New Y position
+        stx     YPosWrk+1
         jsr     CMOVEY                  ; Set it
 
         ldy     #$01
         lda     (sp),y
         sta     XPos+1
+        sta     XPosWrk+1
         tax
         dey
         lda     (sp),y
         sta     XPos                    ; New X position
-
+        sta     XPosWrk
         jsr     CMOVEX                  ; Move the cursor
 
-        cli                             ; Allow interrupts
+        jsr     CDRAW
+
+        plp                             ; Restore interrupt flag
         rts
 
 ;----------------------------------------------------------------------------
@@ -248,6 +390,7 @@ BUTTONS:
 
 POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
 
+        php
         sei                             ; Disable interrupts
         lda     XPos                    ; Transfer the position
         sta     (ptr1),y
@@ -258,7 +401,7 @@ POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
         iny
         sta     (ptr1),y
         lda     YPos+1
-        cli                             ; Enable interrupts
+        plp                             ; Restore interrupt flag
 
         iny
         sta     (ptr1),y                ; Store last byte
@@ -296,106 +439,259 @@ IOCTL:  lda     #<MOUSE_ERR_INV_IOCTL     ; We don't support ioclts for now
 
 ;----------------------------------------------------------------------------
 ; IRQ: Irq handler entry point. Called as a subroutine but in IRQ context
-; (so be careful).
+; (so be careful). The routine MUST return carry set if the interrupt has been
+; 'handled' - which means that the interrupt source is gone. Otherwise it
+; MUST return carry clear.
 ;
 
-IRQ:    jsr     CPREP
-        lda     #$7F
-        sta     CIA1_PRA
-        lda     CIA1_PRB                ; Read port #1
-        and     #%00001100
-        eor     #%00001100              ; Make all bits active high
-        asl
-        sta     Buttons
-        lsr
-        lsr
-        lsr
-        and     #%00000001
-        ora     Buttons
-        sta     Buttons
-        ldx     #%01000000
-        stx     CIA1_PRA
-        ldy     #0
-:       dey
-        bne     :-
-        ldx     SID_ADConv1
-        stx     XPos
-        ldx     SID_ADConv2
-        stx     YPos
+IRQ:
 
-        lda     #$FF
-        tax
-        bne     @AddX                   ; Branch always
-        lda     #$01
-        ldx     #$00
+; Check for a pressed button and place the result into Buttons
 
-; Calculate the new X coordinate (--> a/y)
+        ldx     #0
+        lda     TRIG0                   ; joystick #0 trigger
+        bne     @L0                     ; not pressed
+        ldx     #MOUSE_BTN_LEFT
+@L0:    stx     Buttons
 
-@AddX:  add     XPos
-        tay                             ; Remember low byte
-        txa
-        adc     XPos+1
-        tax
+        jsr     CPREP
 
 ; Limit the X coordinate to the bounding box
 
+        lda     XPosWrk+1
+        ldy     XPosWrk
+        tax
         cpy     XMin
         sbc     XMin+1
-        bpl     @L1
+        bpl     @L2
         ldy     XMin
         ldx     XMin+1
-        jmp     @L2
-@L1:    txa
+        jmp     @L3
+@L2:    txa
 
         cpy     XMax
         sbc     XMax+1
-        bmi     @L2
+        bmi     @L3
         ldy     XMax
         ldx     XMax+1
-@L2:    sty     XPos
+@L3:    sty     XPos
         stx     XPos+1
-
-; Move the mouse pointer to the new X pos
 
         tya
         jsr     CMOVEX
 
-        lda     #$FF
-        tax
-        bne     @AddY
-@Down:  lda     #$01
-        ldx     #$00
-
-; Calculate the new Y coordinate (--> a/y)
-
-@AddY:  add     YPos
-        tay                             ; Remember low byte
-        txa
-        adc     YPos+1
-        tax
-
 ; Limit the Y coordinate to the bounding box
 
+        lda     YPosWrk+1
+        ldy     YPosWrk
+        tax
         cpy     YMin
         sbc     YMin+1
-        bpl     @L3
+        bpl     @L4
         ldy     YMin
         ldx     YMin+1
-        jmp     @L4
-@L3:    txa
+        jmp     @L5
+@L4:    txa
 
         cpy     YMax
         sbc     YMax+1
-        bmi     @L4
+        bmi     @L5
         ldy     YMax
         ldx     YMax+1
-@L4:    sty     YPos
+@L5:    sty     YPos
         stx     YPos+1
-
-; Move the mouse pointer to the new X pos
 
         tya
         jsr     CMOVEY
+
         jsr     CDRAW
-        clc                             ; Interrupt not "handled"
+
+        clc
         rts
+
+
+;----------------------------------------------------------------------------
+; T1Han: Local IRQ routine to poll mouse
+;
+
+T1Han:  tya
+        pha
+        txa
+        pha
+
+.ifdef DEBUG
+        lda     RANDOM
+        sta     COLBK
+.endif
+
+        lda     PORTA
+        tay
+
+.ifdef ST_MOUSE
+
+; ST mouse version
+
+        and     #%00000011
+        ora     dumx
+        tax
+        lda     STTab,x
+        bmi     nxst
+
+        beq     xist
+
+        dec     XPosWrk
+        lda     XPosWrk
+        cmp     #255
+        bne     nxst
+        dec     XPosWrk+1
+        jmp     nxst
+
+xist:   inc     XPosWrk
+        bne     nxst
+        inc     XPosWrk+1
+
+nxst:   tya
+        and     #%00001100
+        ora     dumy
+        tax
+        lda     STTab,x
+        bmi     nyst
+
+        bne     yst
+
+        dec     YPosWrk
+        lda     YPosWrk
+        cmp     #255
+        bne     nyst
+        dec     YPosWrk+1
+        jmp     nyst
+
+yst:    inc     YPosWrk
+        bne     nyst
+        inc     YPosWrk+1
+
+; store old readings
+
+nyst:   tya
+        and     #%00000011
+        asl
+        asl
+        sta     dumx
+        tya
+        and     #%00001100
+        lsr
+        lsr
+        sta     dumy
+
+.elseif .defined (AMIGA_MOUSE)
+
+; Amiga mouse version
+
+        lsr
+        and     #%00000101
+        ora     dumx
+        tax
+        lda     AmiTab,x
+        bmi     nxami
+
+        bne     xiami
+
+        dec     XPosWrk
+        lda     XPosWrk
+        cmp     #255
+        bne     nxami
+        dec     XPosWrk+1
+        jmp     nxami
+
+xiami:  inc     XPosWrk
+        bne     nxami
+        inc     XPosWrk+1
+
+nxami:  tya
+
+        and     #%00000101
+        ora     dumy
+        tax
+        lda     AmiTab,x
+        bmi     nyami
+
+        bne     yiami
+
+        dec     YPosWrk
+        lda     YPosWrk
+        cmp     #255
+        bne     nyami
+        dec     YPosWrk+1
+        jmp     nyami
+
+yiami:  inc     YPosWrk
+        bne     nyami
+        inc     YPosWrk+1
+
+; store old readings
+
+nyami:  tya
+        and     #%00001010
+        sta     dumx
+        tya
+        and     #%00000101
+        asl
+        sta     dumy
+
+.elseif .defined (TRAK_MOUSE)
+
+; trakball version
+
+        eor     oldval
+        and     #%00001000
+        beq     horiz
+
+        tya
+        and     #%00000100
+        beq     mmup
+
+        inc     YPosWrk
+        bne     horiz
+        inc     YPosWrk+1
+        bne     horiz
+
+mmup:   dec     YPosWrk
+        lda     YPosWrk
+        cmp     #255
+        bne     horiz
+        dec     YPosWrk+1
+
+horiz:  tya
+        eor     oldval
+        and     #%00000010
+        beq     mmexit
+
+        tya
+        and     #%00000001
+        beq     mmleft
+
+        inc     XPosWrk
+        bne     mmexit
+        inc     XPosWrk+1
+        bne     mmexit
+
+mmleft: dec     XPosWrk
+        lda     XPosWrk
+        cmp     #255
+        bne     mmexit
+        dec     XPosWrk+1
+
+mmexit: sty     oldval
+
+.endif
+
+        pla
+        tax
+        pla
+        tay
+.ifdef  __ATARIXL__
+        rts
+.else
+        pla
+        rti
+.endif

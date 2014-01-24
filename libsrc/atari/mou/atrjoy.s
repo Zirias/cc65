@@ -1,13 +1,13 @@
 ;
-; Driver for a potentiometer "mouse" e.g. Koala Pad
+; Driver for a "joystick mouse".
 ;
-; Ullrich von Bassewitz, 2004-03-29, 2009-09-26
-; Stefan Haubenthal, 2006-08-20
+; C128 version: Ullrich von Bassewitz, 2004-04-05, 2009-09-26
+; Adapted to Atari: Christian Groessler, 2014-01-02
 ;
 
         .include        "zeropage.inc"
         .include        "mouse-kernel.inc"
-        .include        "c128.inc"
+        .include        "atari.inc"
 
         .macpack        generic
 
@@ -42,6 +42,10 @@ HEADER:
         .addr   IOCTL
         .addr   IRQ
 
+; Mouse driver flags
+
+        .byte   MOUSE_FLAG_LATE_IRQ
+
 ; Callback table, set by the kernel before INSTALL is called
 
 CHIDE:  jmp     $0000                   ; Hide the cursor
@@ -55,15 +59,14 @@ CMOVEY: jmp     $0000                   ; Move the cursor to Y coord
 ;----------------------------------------------------------------------------
 ; Constants
 
-SCREEN_HEIGHT   = 200
-SCREEN_WIDTH    = 320
+SCREEN_HEIGHT   = 191
+SCREEN_WIDTH    = 319
 
 .enum   JOY
         UP      = $01
         DOWN    = $02
         LEFT    = $04
         RIGHT   = $08
-        FIRE    = $10
 .endenum
 
 ;----------------------------------------------------------------------------
@@ -82,13 +85,13 @@ XMax:           .res    2               ; X2 value of bounding box
 YMax:           .res    2               ; Y2 value of bounding box
 Buttons:        .res    1               ; Button mask
 
-; Temporary value used in the int handler
 
-Temp:           .res    1
+Temp:           .res    1               ; Temporary value used in the int handler
+
+; Default values for above variables
 
 .rodata
 
-; Default values for above variables
 ; (We use ".proc" because we want to define both a label and a scope.)
 
 .proc   DefVars
@@ -118,19 +121,14 @@ INSTALL:
         dex
         bpl     @L1
 
-; Be sure the mouse cursor is invisible and at the default location. We
-; need to do that here, because our mouse interrupt handler doesn't set the
-; mouse position if it hasn't changed.
+; Make sure the mouse cursor is at the default location.
 
-        sei
-        jsr     CHIDE
         lda     XPos
         ldx     XPos+1
         jsr     CMOVEX
         lda     YPos
         ldx     YPos+1
         jsr     CMOVEY
-        cli
 
 ; Done, return zero (= MOUSE_ERR_OK)
 
@@ -151,9 +149,10 @@ UNINSTALL       = HIDE                  ; Hide cursor on exit
 ; no special action is required besides hiding the mouse cursor.
 ; No return code required.
 
-HIDE:   sei
+HIDE:   php
+        sei
         jsr     CHIDE
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -163,9 +162,10 @@ HIDE:   sei
 ; no special action is required besides enabling the mouse cursor.
 ; No return code required.
 
-SHOW:   sei
+SHOW:   php
+        sei
         jsr     CSHOW
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -179,6 +179,7 @@ SETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     (ptr1),y
@@ -186,7 +187,7 @@ SETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -197,6 +198,7 @@ GETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     XMin,y
@@ -204,7 +206,7 @@ GETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -215,7 +217,16 @@ GETBOX: sta     ptr1
 ; the screen). No return code required.
 ;
 
-MOVE:   sei                             ; No interrupts
+MOVE:   php
+        sei                             ; No interrupts
+
+        pha
+        txa
+        pha
+        jsr     CPREP
+        pla
+        tax
+        pla
 
         sta     YPos
         stx     YPos+1                  ; New Y position
@@ -228,10 +239,11 @@ MOVE:   sei                             ; No interrupts
         dey
         lda     (sp),y
         sta     XPos                    ; New X position
-
         jsr     CMOVEX                  ; Move the cursor
 
-        cli                             ; Allow interrupts
+        jsr     CDRAW
+
+        plp                             ; Restore interrupt flag
         rts
 
 ;----------------------------------------------------------------------------
@@ -248,6 +260,7 @@ BUTTONS:
 
 POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
 
+        php
         sei                             ; Disable interrupts
         lda     XPos                    ; Transfer the position
         sta     (ptr1),y
@@ -258,7 +271,7 @@ POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
         iny
         sta     (ptr1),y
         lda     YPos+1
-        cli                             ; Enable interrupts
+        plp                             ; Restore interrupt flag
 
         iny
         sta     (ptr1),y                ; Store last byte
@@ -296,37 +309,43 @@ IOCTL:  lda     #<MOUSE_ERR_INV_IOCTL     ; We don't support ioclts for now
 
 ;----------------------------------------------------------------------------
 ; IRQ: Irq handler entry point. Called as a subroutine but in IRQ context
-; (so be careful).
+; (so be careful). The routine MUST return carry set if the interrupt has been
+; 'handled' - which means that the interrupt source is gone. Otherwise it
+; MUST return carry clear.
 ;
 
-IRQ:    jsr     CPREP
-        lda     #$7F
-        sta     CIA1_PRA
-        lda     CIA1_PRB                ; Read port #1
-        and     #%00001100
-        eor     #%00001100              ; Make all bits active high
-        asl
-        sta     Buttons
-        lsr
-        lsr
-        lsr
-        and     #%00000001
-        ora     Buttons
-        sta     Buttons
-        ldx     #%01000000
-        stx     CIA1_PRA
-        ldy     #0
-:       dey
-        bne     :-
-        ldx     SID_ADConv1
-        stx     XPos
-        ldx     SID_ADConv2
-        stx     YPos
+IRQ:
 
+; Check for a pressed button and place the result into Buttons
+
+        ldx     #0
+        lda     TRIG0                   ; joystick #0 trigger
+        bne     @L0                     ; not pressed
+        ldx     #MOUSE_BTN_LEFT
+@L0:    stx     Buttons
+
+        lda     PORTA                   ; get joystick direction bits
+        and     #15                     ; clear joystick #1 bits
+        eor     #15
+        sta     Temp
+
+        jsr     CPREP
+
+; Check left/right
+
+        lda     Temp                    ; Read joystick #0
+        and     #(JOY::LEFT | JOY::RIGHT)
+        beq     @SkipX                  ;
+
+; We will cheat here and rely on the fact that either the left, OR the right
+; bit can be active
+
+        and     #JOY::RIGHT             ; Check RIGHT bit
+        bne     @Right
         lda     #$FF
         tax
         bne     @AddX                   ; Branch always
-        lda     #$01
+@Right: lda     #$01
         ldx     #$00
 
 ; Calculate the new X coordinate (--> a/y)
@@ -360,6 +379,17 @@ IRQ:    jsr     CPREP
         tya
         jsr     CMOVEX
 
+; Calculate the Y movement vector
+
+@SkipX: lda     Temp                    ; Read joystick #0
+        and     #(JOY::UP | JOY::DOWN)  ; Check up/down
+        beq     @SkipY                  ;
+
+; We will cheat here and rely on the fact that either the up, OR the down
+; bit can be active
+
+        lsr     a
+        bcc     @Down
         lda     #$FF
         tax
         bne     @AddY
@@ -396,6 +426,10 @@ IRQ:    jsr     CPREP
 
         tya
         jsr     CMOVEY
-        jsr     CDRAW
+
+; Done
+
+@SkipY: jsr     CDRAW
         clc                             ; Interrupt not "handled"
         rts
+

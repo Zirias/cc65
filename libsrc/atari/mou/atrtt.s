@@ -1,13 +1,12 @@
 ;
-; Driver for a potentiometer "mouse" e.g. Koala Pad
+; Mouse driver for Atari Touch Tablet
 ;
-; Ullrich von Bassewitz, 2004-03-29, 2009-09-26
-; Stefan Haubenthal, 2006-08-20
+; Christian Groessler, 2014-01-05
 ;
 
         .include        "zeropage.inc"
         .include        "mouse-kernel.inc"
-        .include        "c128.inc"
+        .include        "atari.inc"
 
         .macpack        generic
 
@@ -42,6 +41,10 @@ HEADER:
         .addr   IOCTL
         .addr   IRQ
 
+; Mouse driver flags
+
+        .byte   MOUSE_FLAG_LATE_IRQ
+
 ; Callback table, set by the kernel before INSTALL is called
 
 CHIDE:  jmp     $0000                   ; Hide the cursor
@@ -55,15 +58,14 @@ CMOVEY: jmp     $0000                   ; Move the cursor to Y coord
 ;----------------------------------------------------------------------------
 ; Constants
 
-SCREEN_HEIGHT   = 200
-SCREEN_WIDTH    = 320
+SCREEN_HEIGHT   = 191
+SCREEN_WIDTH    = 319
 
 .enum   JOY
         UP      = $01
         DOWN    = $02
         LEFT    = $04
         RIGHT   = $08
-        FIRE    = $10
 .endenum
 
 ;----------------------------------------------------------------------------
@@ -82,13 +84,10 @@ XMax:           .res    2               ; X2 value of bounding box
 YMax:           .res    2               ; Y2 value of bounding box
 Buttons:        .res    1               ; Button mask
 
-; Temporary value used in the int handler
-
-Temp:           .res    1
+; Default values for above variables
 
 .rodata
 
-; Default values for above variables
 ; (We use ".proc" because we want to define both a label and a scope.)
 
 .proc   DefVars
@@ -118,19 +117,14 @@ INSTALL:
         dex
         bpl     @L1
 
-; Be sure the mouse cursor is invisible and at the default location. We
-; need to do that here, because our mouse interrupt handler doesn't set the
-; mouse position if it hasn't changed.
+; Make sure the mouse cursor is at the default location.
 
-        sei
-        jsr     CHIDE
         lda     XPos
         ldx     XPos+1
         jsr     CMOVEX
         lda     YPos
         ldx     YPos+1
         jsr     CMOVEY
-        cli
 
 ; Done, return zero (= MOUSE_ERR_OK)
 
@@ -151,9 +145,10 @@ UNINSTALL       = HIDE                  ; Hide cursor on exit
 ; no special action is required besides hiding the mouse cursor.
 ; No return code required.
 
-HIDE:   sei
+HIDE:   php
+        sei
         jsr     CHIDE
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -163,9 +158,10 @@ HIDE:   sei
 ; no special action is required besides enabling the mouse cursor.
 ; No return code required.
 
-SHOW:   sei
+SHOW:   php
+        sei
         jsr     CSHOW
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -179,6 +175,7 @@ SETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     (ptr1),y
@@ -186,7 +183,7 @@ SETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -197,6 +194,7 @@ GETBOX: sta     ptr1
         stx     ptr1+1                  ; Save data pointer
 
         ldy     #.sizeof (MOUSE_BOX)-1
+        php
         sei
 
 @L1:    lda     XMin,y
@@ -204,7 +202,7 @@ GETBOX: sta     ptr1
         dey
         bpl     @L1
 
-        cli
+        plp
         rts
 
 ;----------------------------------------------------------------------------
@@ -215,7 +213,16 @@ GETBOX: sta     ptr1
 ; the screen). No return code required.
 ;
 
-MOVE:   sei                             ; No interrupts
+MOVE:   php
+        sei                             ; No interrupts
+
+        pha
+        txa
+        pha
+        jsr     CPREP
+        pla
+        tax
+        pla
 
         sta     YPos
         stx     YPos+1                  ; New Y position
@@ -228,10 +235,11 @@ MOVE:   sei                             ; No interrupts
         dey
         lda     (sp),y
         sta     XPos                    ; New X position
-
         jsr     CMOVEX                  ; Move the cursor
 
-        cli                             ; Allow interrupts
+        jsr     CSHOW
+
+        plp                             ; Restore interrupt flag
         rts
 
 ;----------------------------------------------------------------------------
@@ -248,6 +256,7 @@ BUTTONS:
 
 POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
 
+        php
         sei                             ; Disable interrupts
         lda     XPos                    ; Transfer the position
         sta     (ptr1),y
@@ -258,7 +267,7 @@ POS:    ldy     #MOUSE_POS::XCOORD      ; Structure offset
         iny
         sta     (ptr1),y
         lda     YPos+1
-        cli                             ; Enable interrupts
+        plp                             ; Restore interrupt flag
 
         iny
         sta     (ptr1),y                ; Store last byte
@@ -296,63 +305,120 @@ IOCTL:  lda     #<MOUSE_ERR_INV_IOCTL     ; We don't support ioclts for now
 
 ;----------------------------------------------------------------------------
 ; IRQ: Irq handler entry point. Called as a subroutine but in IRQ context
-; (so be careful).
+; (so be careful). The routine MUST return carry set if the interrupt has been
+; 'handled' - which means that the interrupt source is gone. Otherwise it
+; MUST return carry clear.
 ;
 
-IRQ:    jsr     CPREP
-        lda     #$7F
-        sta     CIA1_PRA
-        lda     CIA1_PRB                ; Read port #1
-        and     #%00001100
-        eor     #%00001100              ; Make all bits active high
-        asl
-        sta     Buttons
-        lsr
-        lsr
-        lsr
-        and     #%00000001
+IRQ:
+
+; Check for a pressed button and place the result into Buttons
+
+        ldx     #0
+        stx     Buttons
+
+        lda     PORTA                   ; get other buttons
+        eor     #255
+        tax
+        and     #5                      ; pen button and left button are mapped to left mouse button
+        beq     @L01
+        lda     #MOUSE_BTN_LEFT
         ora     Buttons
         sta     Buttons
-        ldx     #%01000000
-        stx     CIA1_PRA
-        ldy     #0
-:       dey
-        bne     :-
-        ldx     SID_ADConv1
+@L01:   txa
+        and     #8
+        beq     @L02
+        lda     #MOUSE_BTN_RIGHT
+        ora     Buttons
+        sta     Buttons
+
+; If we read 228 for X or Y positions, we assume the user has lifted the pen
+; and don't change the cursor position.
+
+@L02:   lda     PADDL0
+        cmp     #228
+        beq     @Cont                   ; CF set if equal
+        lda     PADDL1
+        cmp     #228                    ; CF set if equal
+
+@Cont:  php                             ; remember CF
+        jsr     CPREP
+        plp                             ; restore CF
+
+        bcc     @L03
+        jmp     @Show
+
+@L03:   ldx     #0
+        stx     XPos+1
+        stx     YPos+1
+
+; Get cursor position
+; -------------------
+; The touch pad is read thru the paddle potentiometers. The possible
+; values are 1..228. Since the maximum value is less than the X
+; dimension we have to "stretch" this value. In order to use only
+; divisions by powers of two, we use the following appoximation:
+; 320/227 = 1.4096
+; 1+1/2-1/8+1/32 = 1.4062
+; For Y we subtract 1/8 of it to get in the YMax ballpark.
+; 228-228/8=199.5
+; A small area in the Y dimension of the touchpad isn't used with
+; this approximation. The Y value is inverted, (0,0) is the bottom
+; left corner of the touchpad.
+
+; X
+
+        ldx     PADDL0                  ; get X postion
+        dex                             ; decrement, since it's 1-based
         stx     XPos
-        ldx     SID_ADConv2
-        stx     YPos
-
-        lda     #$FF
-        tax
-        bne     @AddX                   ; Branch always
-        lda     #$01
-        ldx     #$00
-
-; Calculate the new X coordinate (--> a/y)
-
-@AddX:  add     XPos
-        tay                             ; Remember low byte
         txa
-        adc     XPos+1
+        lsr     a
+        tax
+        clc
+        adc     XPos
+        sta     XPos
+        bcc     @L04
+        inc     XPos+1
+@L04:   txa
+        lsr     a                       ; port value / 4
+        lsr     a                       ; port value / 8
+        tax
+        sec
+        lda     XPos
+        stx     XPos
+        sbc     XPos
+        sta     XPos
+        bcs     @L05
+        dec     XPos+1
+@L05:   txa
+        lsr     a                       ; port value / 16
+        lsr     a                       ; port value / 32
+        clc
+        adc     XPos
+        sta     XPos
+        bcc     @L06
+        inc     XPos+1
+
+@L06:   tay
+        lda     XPos+1
         tax
 
 ; Limit the X coordinate to the bounding box
 
         cpy     XMin
         sbc     XMin+1
-        bpl     @L1
+        bpl     @L07
         ldy     XMin
         ldx     XMin+1
-        jmp     @L2
-@L1:    txa
+        jmp     @L08
+@L07:   txa
 
         cpy     XMax
         sbc     XMax+1
-        bmi     @L2
+        bmi     @L08
         ldy     XMax
         ldx     XMax+1
-@L2:    sty     XPos
+@L08:   sty     XPos
         stx     XPos+1
 
 ; Move the mouse pointer to the new X pos
@@ -360,42 +426,52 @@ IRQ:    jsr     CPREP
         tya
         jsr     CMOVEX
 
-        lda     #$FF
+; Y
+
+        ldx     PADDL1                  ; get Y postion
+        dex                             ; decrement, since it's 1-based
+        stx     YPos
+        lda     #228
+        sec
+        sbc     YPos                    ; invert value
         tax
-        bne     @AddY
-@Down:  lda     #$01
-        ldx     #$00
-
-; Calculate the new Y coordinate (--> a/y)
-
-@AddY:  add     YPos
-        tay                             ; Remember low byte
+        lsr     a
+        lsr     a
+        lsr     a
+        sta     YPos
         txa
-        adc     YPos+1
+        sec
+        sbc     YPos
+        sta     YPos
+        tay
+        lda     YPos+1
         tax
 
 ; Limit the Y coordinate to the bounding box
 
         cpy     YMin
         sbc     YMin+1
-        bpl     @L3
+        bpl     @L09
         ldy     YMin
         ldx     YMin+1
-        jmp     @L4
-@L3:    txa
+        jmp     @L10
+@L09:   txa
 
         cpy     YMax
         sbc     YMax+1
-        bmi     @L4
+        bmi     @L10
         ldy     YMax
         ldx     YMax+1
-@L4:    sty     YPos
+@L10:   sty     YPos
         stx     YPos+1
 
 ; Move the mouse pointer to the new X pos
 
         tya
         jsr     CMOVEY
-        jsr     CDRAW
+
+@Show:  jsr     CDRAW
+
         clc                             ; Interrupt not "handled"
         rts
+

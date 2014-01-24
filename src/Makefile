@@ -12,13 +12,8 @@ PROGS = ar65  \
         sim65 \
         sp65
 
-ifdef prefix
-  datarootdir = $(prefix)/share
-  datadir = $(datarootdir)/cc65
-else
-  prefix = $(abspath ..)
-  datarootdir = $(prefix)
-  datadir = $(datarootdir)
+ifndef datadir
+  datadir = $(abspath ..)
 endif
 
 CA65_INC = $(datadir)/asminc
